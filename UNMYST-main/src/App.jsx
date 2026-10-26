@@ -31,7 +31,11 @@ import {
   Copy,
   Sparkles,
 } from "lucide-react";
-import { checkBackend, uploadMedicalDocument } from "./api";
+import {
+  checkBackend,
+  uploadMedicalDocument,
+  explainMedicalDocument,
+} from "./api";
 import "./App.css";
 
 const navigation = [
@@ -126,10 +130,14 @@ function App() {
   const [activePage, setActivePage] = useState("Dashboard");
   const [backendStatus, setBackendStatus] = useState("checking");
   const [selectedFile, setSelectedFile] = useState(null);
-  const [uploading, setUploading] = useState(false);
-  const [documentResult, setDocumentResult] = useState(null);
-  const [error, setError] = useState("");
-  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+const [uploading, setUploading] = useState(false);
+const [explaining, setExplaining] = useState(false);
+
+const [documentResult, setDocumentResult] = useState(null);
+const [explanationResult, setExplanationResult] = useState(null);
+
+const [error, setError] = useState("");  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [largeText, setLargeText] = useState(false);
   const [highContrast, setHighContrast] = useState(false);
   const [notice, setNotice] = useState("");
@@ -208,7 +216,14 @@ function App() {
 
     try {
       const result = await uploadMedicalDocument(selectedFile);
-      setDocumentResult(result);
+
+setDocumentResult({
+  ...result,
+  text: result.extracted_text || "",
+  needs_ocr: result.status === "needs_ocr",
+});
+
+setExplanationResult(null);
     } catch (err) {
       setError(
         err.message ||
@@ -218,6 +233,29 @@ function App() {
       setUploading(false);
     }
   }
+
+async function handleExplainDocument() {
+  if (!selectedFile) {
+    setError("Please select a PDF or TXT document first.");
+    return;
+  }
+
+  setExplaining(true);
+  setError("");
+  setExplanationResult(null);
+
+  try {
+    const result = await explainMedicalDocument(selectedFile);
+    setExplanationResult(result);
+  } catch (err) {
+    setError(
+      err.message ||
+        "We could not generate the explanation. Please try again."
+    );
+  } finally {
+    setExplaining(false);
+  }
+}
 
   async function copyExtractedText() {
     const text = documentResult?.text;
@@ -340,6 +378,30 @@ function App() {
           )}
         </button>
 
+<button
+  className="button button-secondary upload-submit"
+  onClick={handleExplainDocument}
+  disabled={
+    explaining ||
+    uploading ||
+    backendStatus !== "connected" ||
+    !selectedFile
+  }
+>
+  {explaining ? (
+    <>
+      <LoaderCircle size={19} className="spin" />
+      Explaining with Gemma...
+    </>
+  ) : (
+    <>
+      <Sparkles size={19} />
+      Explain with Gemma
+    </>
+  )}
+</button>
+
+
         {documentResult && (
           <div className="extraction-result" aria-live="polite">
             <div className="result-heading">
@@ -378,6 +440,38 @@ function App() {
             )}
           </div>
         )}
+
+{explanationResult && (
+  <section className="extraction-result" aria-live="polite">
+    <div className="result-heading">
+      <div>
+        <Sparkles size={22} />
+        <h3>Medical Report Explanation</h3>
+      </div>
+
+      <button
+        className="small-action"
+        onClick={() => speakText(explanationResult.explanation)}
+      >
+        <Volume2 size={16} />
+        Read aloud
+      </button>
+    </div>
+
+    <p className="result-note">
+      AI-generated explanation using {explanationResult.model}.
+    </p>
+
+    <div className="extracted-text">
+      {explanationResult.explanation}
+    </div>
+
+    <div className="inline-warning">
+      {explanationResult.disclaimer}
+    </div>
+  </section>
+)}
+
 
         {notice && <p className="status-notice" role="status">{notice}</p>}
       </section>
