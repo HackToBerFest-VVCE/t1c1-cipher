@@ -1,3 +1,4 @@
+
 const API_BASE_URL = "http://127.0.0.1:8000";
 
 export async function checkBackend() {
@@ -26,6 +27,52 @@ export async function uploadMedicalDocument(file: File) {
 
   if (!response.ok) {
     throw new Error(result.detail || "Document upload failed.");
+  }
+
+  return result;
+}
+
+export async function explainMedicalDocument(file: File) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(
+    `${API_BASE_URL}/api/documents/explain`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result.detail || "Could not generate the medical document explanation."
+    );
+  }
+
+  return result;
+}
+
+export async function explainMedicalText(text: string) {
+  const response = await fetch(
+    `${API_BASE_URL}/api/gemma/explain`,
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ text }),
+    }
+  );
+
+  const result = await response.json();
+
+  if (!response.ok) {
+    throw new Error(
+      result.detail || "Could not generate the explanation."
+    );
   }
 
   return result;
