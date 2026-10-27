@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import {
   Activity,
   ArrowRight,
@@ -14,13 +14,13 @@ import {
   Languages,
   MapPin,
   Menu,
-  Mic,
-  Pill,
+  MessageCircle,
   Plus,
   Search,
   Settings,
   ShieldCheck,
   Stethoscope,
+  Square,
   Upload,
   Volume2,
   X,
@@ -28,21 +28,40 @@ import {
   BookOpen,
   ClipboardList,
   LoaderCircle,
-  Copy,
   Sparkles,
 } from "lucide-react";
 import {
   checkBackend,
-  uploadMedicalDocument,
   explainMedicalDocument,
 } from "./api";
+import Reminders from "./Reminders.jsx";
+import DoctorVisitNotes from "./DoctorVisitNotes.jsx";
+import FaqChat from "./FaqChat.jsx";
+import NearbyMedicalStores from "./NearbyMedicalStores.jsx";
+import useMedicationReminders from "./useMedicationReminders.js";
+import { LANGUAGES, translate } from "./translations.js";
 import "./App.css";
+
+const ExplanationMarkdown = lazy(async () => {
+  const [markdownModule, gfmModule] = await Promise.all([
+    import("react-markdown"),
+    import("remark-gfm"),
+  ]);
+  const ReactMarkdown = markdownModule.default;
+  const remarkGfm = gfmModule.default;
+
+  return {
+    default: function FormattedExplanation({ children }) {
+      return <ReactMarkdown remarkPlugins={[remarkGfm]}>{children}</ReactMarkdown>;
+    },
+  };
+});
 
 const navigation = [
   { label: "Dashboard", icon: Home },
   { label: "Medical Reports", icon: FileText },
-  { label: "Prescription Reader", icon: Pill },
-  { label: "Voice Assistant", icon: Mic },
+  { label: "Find health videos", icon: Stethoscope },
+  { label: "Health FAQ Chat", icon: MessageCircle },
   { label: "Reminders", icon: Bell },
   { label: "Doctor Visit Notes", icon: ClipboardList },
   { label: "Nearby Medical Stores", icon: MapPin },
@@ -60,24 +79,23 @@ const features = [
     page: "Medical Reports",
   },
   {
-    title: "Prescription Reader",
+    title: "Find health videos",
     description:
-      "Make prescription information easier to read and understand.",
-    icon: Pill,
-    color: "lavender",
-    tag: "MEDICATION",
-    action: "Open reader",
-    page: "Prescription Reader",
+      "Search YouTube for videos about a disease or health topic.",
+    icon: Stethoscope,
+    color: "mint",
+    tag: "HEALTH EDUCATION",
+    action: "Search YouTube",
+    page: "Find health videos",
   },
   {
-    title: "Voice Assistant",
-    description:
-      "Explore voice-based assistance designed for accessible healthcare.",
-    icon: Volume2,
-    color: "peach",
-    tag: "ACCESSIBILITY",
-    action: "Explore voice tools",
-    page: "Voice Assistant",
+    title: "Health FAQ Chat",
+    description: "Ask common questions about using UNMYST and its features.",
+    icon: MessageCircle,
+    color: "blue",
+    tag: "QUICK SUPPORT",
+    action: "Ask a question",
+    page: "Health FAQ Chat",
   },
   {
     title: "Medication Reminders",
@@ -114,34 +132,46 @@ const features = [
 const pageDescriptions = {
   "Medical Reports":
     "Upload a medical report and extract its text for easier reading.",
-  "Prescription Reader":
-    "A dedicated space for making prescription information more accessible.",
-  "Voice Assistant":
-    "Explore accessible, voice-first ways to interact with healthcare information.",
+  "Find health videos":
+    "Search YouTube for videos about a disease or health topic.",
+  "Health FAQ Chat":
+    "Get prepared answers to common questions about using UNMYST.",
   Reminders:
-    "A place to organize medicine schedules and healthcare follow-ups.",
+    "Add your medicines, get reminded on time, and mark each dose as taken or skipped.",
   "Doctor Visit Notes":
-    "Keep doctor instructions and appointment notes organized.",
+    "Record a doctor visit conversation and keep track of hospital visits.",
   "Nearby Medical Stores":
-    "A place to explore pharmacies near your location.",
+    "Find nearby pharmacies using your location or a city/postal code.",
 };
 
 function App() {
   const [activePage, setActivePage] = useState("Dashboard");
+  const [language, setLanguage] = useState(() => localStorage.getItem("unmyst-language") || "en");
   const [backendStatus, setBackendStatus] = useState("checking");
   const [selectedFile, setSelectedFile] = useState(null);
+  const [youtubeKeyword, setYoutubeKeyword] = useState("");
 
-const [uploading, setUploading] = useState(false);
 const [explaining, setExplaining] = useState(false);
 
-const [documentResult, setDocumentResult] = useState(null);
 const [explanationResult, setExplanationResult] = useState(null);
 
 const [error, setError] = useState("");  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [largeText, setLargeText] = useState(false);
   const [highContrast, setHighContrast] = useState(false);
   const [notice, setNotice] = useState("");
+  const [speakingExplanation, setSpeakingExplanation] = useState(false);
   const fileInputRef = useRef(null);
+  const speechUtteranceRef = useRef(null);
+  const medication = useMedicationReminders({
+    backendStatus,
+    onAlert: setNotice,
+  });
+  const t = (text) => translate(language, text);
+
+  useEffect(() => {
+    localStorage.setItem("unmyst-language", language);
+    document.documentElement.lang = LANGUAGES.find((item) => item.code === language)?.htmlLang || "en";
+  }, [language]);
 
   useEffect(() => {
     let active = true;
@@ -180,6 +210,19 @@ const [error, setError] = useState("");  const [mobileMenuOpen, setMobileMenuOpe
     }
   }
 
+  function searchHealthVideos(event) {
+    event.preventDefault();
+    const keyword = youtubeKeyword.trim();
+    if (!keyword) return;
+
+    const query = `${keyword} health education`;
+    window.open(
+      `https://www.youtube.com/results?search_query=${encodeURIComponent(query)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+  }
+
   function chooseFile(file) {
     if (!file) return;
 
@@ -188,50 +231,17 @@ const [error, setError] = useState("");  const [mobileMenuOpen, setMobileMenuOpe
     if (!allowed) {
       setError("Please choose a PDF or TXT file.");
       setSelectedFile(null);
-      setDocumentResult(null);
       return;
     }
 
     if (file.size > 10 * 1024 * 1024) {
       setError("Your file is larger than 10 MB. Please choose a smaller file.");
       setSelectedFile(null);
-      setDocumentResult(null);
       return;
     }
 
     setSelectedFile(file);
-    setDocumentResult(null);
     setError("");
-  }
-
-  async function handleUpload() {
-    if (!selectedFile) {
-      setError("Please select a PDF or TXT document first.");
-      return;
-    }
-
-    setUploading(true);
-    setError("");
-    setDocumentResult(null);
-
-    try {
-      const result = await uploadMedicalDocument(selectedFile);
-
-setDocumentResult({
-  ...result,
-  text: result.extracted_text || "",
-  needs_ocr: result.status === "needs_ocr",
-});
-
-setExplanationResult(null);
-    } catch (err) {
-      setError(
-        err.message ||
-          "We could not process this document. Check that the backend is running."
-      );
-    } finally {
-      setUploading(false);
-    }
   }
 
 async function handleExplainDocument() {
@@ -257,29 +267,54 @@ async function handleExplainDocument() {
   }
 }
 
-  async function copyExtractedText() {
-    const text = documentResult?.text;
-
-    if (!text) return;
-
-    try {
-      await navigator.clipboard.writeText(text);
-      setNotice("Extracted text copied to clipboard.");
-    } catch {
-      setNotice("Copy is unavailable in this browser. Please select the text manually.");
-    }
-  }
-
-  function speakText(text) {
-    if (!("speechSynthesis" in window)) {
+  function speakText(text, { lang = "en-US", markdown = false } = {}) {
+    if (!("speechSynthesis" in window) || typeof window.SpeechSynthesisUtterance !== "function") {
       setNotice("Text-to-speech is not supported by this browser.");
       return;
     }
 
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
+    const speechText = markdown
+      ? text
+        .replace(/```[\s\S]*?```/g, (block) => block.replace(/```\w*\n?|```/g, " "))
+        .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/^\s{0,3}#{1,6}\s*/gm, "")
+        .replace(/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/gm, "")
+        .replace(/\*\*(.*?)\*\*|__(.*?)__/g, "$1$2")
+        .replace(/\*(.*?)\*|_(.*?)_/g, "$1$2")
+        .replace(/`([^`]+)`/g, "$1")
+        .replace(/^\s*[-*+]\s+/gm, "")
+        .replace(/^\s*\d+[.)]\s+/gm, "")
+        .replace(/\|/g, ", ")
+      : text;
+    const plainText = speechText.replace(/\s+/g, " ").trim();
+    if (!plainText) return;
+
+    const synthesis = window.speechSynthesis;
+    synthesis.cancel();
+    const utterance = new window.SpeechSynthesisUtterance(plainText);
+    utterance.lang = lang;
     utterance.rate = 0.9;
-    window.speechSynthesis.speak(utterance);
+    const voice = synthesis.getVoices().find((item) => item.lang.toLowerCase().startsWith("en-"));
+    if (voice) utterance.voice = voice;
+    utterance.onstart = () => setSpeakingExplanation(markdown);
+    utterance.onend = () => setSpeakingExplanation(false);
+    utterance.onerror = () => {
+      setSpeakingExplanation(false);
+      setNotice("Audio playback could not start. Check that your device has an English speech voice enabled.");
+    };
+    speechUtteranceRef.current = utterance;
+    synthesis.resume();
+    synthesis.speak(utterance);
+  }
+
+  function toggleExplanationSpeech() {
+    if (speakingExplanation) {
+      window.speechSynthesis?.cancel();
+      setSpeakingExplanation(false);
+      return;
+    }
+
+    speakText(explanationResult.explanation, { lang: "en-US", markdown: true });
   }
 
   function renderUploadWorkspace() {
@@ -290,9 +325,9 @@ async function handleExplainDocument() {
             <FileText size={25} />
           </div>
           <div>
-            <span className="eyebrow">DOCUMENT WORKSPACE</span>
-            <h2>Medical Report Simplifier</h2>
-            <p>Start by uploading a medical document.</p>
+            <span className="eyebrow">{t("DOCUMENT WORKSPACE")}</span>
+            <h2>{t("Medical Report Simplifier")}</h2>
+            <p>{t("Start by uploading a medical document.")}</p>
           </div>
         </div>
 
@@ -307,16 +342,16 @@ async function handleExplainDocument() {
           <div className="upload-icon">
             <Upload size={27} />
           </div>
-          <h3>Upload your medical document</h3>
-          <p>Drag and drop your file here, or choose a file from your device.</p>
-          <p className="file-hint">Supported formats: PDF and TXT · Maximum 10 MB</p>
+          <h3>{t("Upload your medical document")}</h3>
+          <p>{t("Drag and drop your file here, or choose a file from your device.")}</p>
+          <p className="file-hint">{t("Supported formats: PDF and TXT · Maximum 10 MB")}</p>
 
           <input
             ref={fileInputRef}
             type="file"
             accept=".pdf,.txt,application/pdf,text/plain"
             className="visually-hidden"
-            aria-label="Choose medical document"
+            aria-label={t("Choose medical document")}
             onChange={(event) => chooseFile(event.target.files?.[0])}
           />
 
@@ -325,7 +360,7 @@ async function handleExplainDocument() {
             onClick={() => fileInputRef.current?.click()}
           >
             <Plus size={18} />
-            Choose document
+            {t("Choose document")}
           </button>
 
           {selectedFile && (
@@ -337,10 +372,9 @@ async function handleExplainDocument() {
               </div>
               <button
                 className="icon-button"
-                aria-label="Remove selected file"
+                aria-label={t("Remove selected file")}
                 onClick={() => {
                   setSelectedFile(null);
-                  setDocumentResult(null);
                   setError("");
                   if (fileInputRef.current) fileInputRef.current.value = "";
                 }}
@@ -353,37 +387,17 @@ async function handleExplainDocument() {
 
         {backendStatus === "offline" && (
           <div className="inline-warning">
-            The backend is not connected. Start your FastAPI server on port 8000
-            before uploading.
+            {t("The backend is not connected. Start your FastAPI server on port 8000 before uploading.")}
           </div>
         )}
 
-        {error && <div className="inline-error" role="alert">{error}</div>}
-
-        <button
-          className="button button-primary upload-submit"
-          onClick={handleUpload}
-          disabled={uploading || backendStatus !== "connected" || !selectedFile}
-        >
-          {uploading ? (
-            <>
-              <LoaderCircle size={19} className="spin" />
-              Extracting text...
-            </>
-          ) : (
-            <>
-              <Sparkles size={19} />
-              Upload and extract text
-            </>
-          )}
-        </button>
+        {error && <div className="inline-error" role="alert">{t(error)}</div>}
 
 <button
   className="button button-secondary upload-submit"
   onClick={handleExplainDocument}
   disabled={
     explaining ||
-    uploading ||
     backendStatus !== "connected" ||
     !selectedFile
   }
@@ -391,70 +405,33 @@ async function handleExplainDocument() {
   {explaining ? (
     <>
       <LoaderCircle size={19} className="spin" />
-      Explaining with Gemma...
+      {t("Explaining with Gemma...")}
     </>
   ) : (
     <>
       <Sparkles size={19} />
-      Explain with Gemma
+      {t("Explain with Gemma")}
     </>
   )}
 </button>
 
-
-        {documentResult && (
-          <div className="extraction-result" aria-live="polite">
-            <div className="result-heading">
-              <div>
-                <CheckCircle2 size={22} />
-                <h3>Document processed</h3>
-              </div>
-              {documentResult.text && (
-                <div className="result-actions">
-                  <button className="small-action" onClick={copyExtractedText}>
-                    <Copy size={16} /> Copy
-                  </button>
-                  <button
-                    className="small-action"
-                    onClick={() => speakText(documentResult.text)}
-                  >
-                    <Volume2 size={16} /> Read aloud
-                  </button>
-                </div>
-              )}
-            </div>
-
-            {documentResult.needs_ocr ? (
-              <p>
-                This document does not contain selectable text. OCR support is
-                needed to read scanned pages or image-only PDFs.
-              </p>
-            ) : (
-              <>
-                <p className="result-note">
-                  This is extracted document text, not an AI-generated medical
-                  explanation.
-                </p>
-                <pre className="extracted-text">{documentResult.text}</pre>
-              </>
-            )}
-          </div>
-        )}
 
 {explanationResult && (
   <section className="extraction-result" aria-live="polite">
     <div className="result-heading">
       <div>
         <Sparkles size={22} />
-        <h3>Medical Report Explanation</h3>
+        <h3>{t("Medical Report Explanation")}</h3>
       </div>
 
       <button
         className="small-action"
-        onClick={() => speakText(explanationResult.explanation)}
+        type="button"
+        aria-label={t(speakingExplanation ? "Stop reading" : "Read aloud in English")}
+        onClick={toggleExplanationSpeech}
       >
-        <Volume2 size={16} />
-        Read aloud
+        {speakingExplanation ? <Square size={15} /> : <Volume2 size={16} />}
+        {t(speakingExplanation ? "Stop reading" : "Read aloud in English")}
       </button>
     </div>
 
@@ -462,8 +439,10 @@ async function handleExplainDocument() {
       AI-generated explanation using {explanationResult.model}.
     </p>
 
-    <div className="extracted-text">
-      {explanationResult.explanation}
+    <div className="explanation-content">
+      <Suspense fallback={null}>
+        <ExplanationMarkdown>{explanationResult.explanation}</ExplanationMarkdown>
+      </Suspense>
     </div>
 
     <div className="inline-warning">
@@ -485,18 +464,17 @@ async function handleExplainDocument() {
           <div className="welcome-content">
             <div className="welcome-label">
               <Heart size={16} />
-              HEALTHCARE, MADE EASIER
+              {t("HEALTHCARE, MADE EASIER")}
             </div>
-            <h2>Your health journey, <span>made simpler.</span></h2>
+            <h2>{t("Your health journey, ")}<span>{t("made simpler.")}</span></h2>
             <p>
-              Understand your medical information, stay organized, and take
-              your next healthcare step with confidence.
+              {t("Understand your medical information, stay organized, and take your next healthcare step with confidence.")}
             </p>
             <button
               className="button button-white"
               onClick={() => navigateTo("Medical Reports")}
             >
-              Simplify a medical report <ArrowRight size={18} />
+              {t("Simplify a report")} <ArrowRight size={18} />
             </button>
           </div>
           <div className="welcome-art" aria-hidden="true">
@@ -513,9 +491,9 @@ async function handleExplainDocument() {
         <section className="quick-section">
           <div className="section-heading">
             <div>
-              <span className="eyebrow">YOUR HEALTH TOOLS</span>
-              <h2>What would you like to do?</h2>
-              <p>Choose a service to get started.</p>
+              <span className="eyebrow">{t("YOUR HEALTH TOOLS")}</span>
+              <h2>{t("What would you like to do?")}</h2>
+              <p>{t("Choose a service to get started.")}</p>
             </div>
           </div>
 
@@ -528,14 +506,14 @@ async function handleExplainDocument() {
                   <div className={`feature-icon ${feature.color}`}>
                     <Icon size={24} strokeWidth={1.9} />
                   </div>
-                  <span className="feature-tag">{feature.tag}</span>
-                  <h3>{feature.title}</h3>
-                  <p>{feature.description}</p>
+                  <span className="feature-tag">{t(feature.tag)}</span>
+                  <h3>{t(feature.title)}</h3>
+                  <p>{t(feature.description)}</p>
                   <button
                     className="feature-link"
                     onClick={() => navigateTo(feature.page)}
                   >
-                    {feature.action}
+                    {t(feature.action)}
                     <ChevronRight size={18} />
                   </button>
                 </article>
@@ -550,11 +528,10 @@ async function handleExplainDocument() {
               <Eye size={24} />
             </div>
             <div>
-              <span className="eyebrow">DESIGNED FOR EVERYONE</span>
-              <h3>Your comfort comes first</h3>
+              <span className="eyebrow">{t("DESIGNED FOR EVERYONE")}</span>
+              <h3>{t("Your comfort comes first")}</h3>
               <p>
-                Adjust text size and contrast to make the interface more
-                comfortable to use.
+                {t("Adjust text size and contrast to make the interface more comfortable to use.")}
               </p>
               <div className="accessibility-actions">
                 <button
@@ -562,14 +539,14 @@ async function handleExplainDocument() {
                   onClick={() => setLargeText((value) => !value)}
                   aria-pressed={largeText}
                 >
-                  <Plus size={16} /> {largeText ? "Normal text" : "Larger text"}
+                  <Plus size={16} /> {largeText ? t("Normal text") : t("Larger text")}
                 </button>
                 <button
                   className={`setting-chip ${highContrast ? "setting-active" : ""}`}
                   onClick={() => setHighContrast((value) => !value)}
                   aria-pressed={highContrast}
                 >
-                  <Eye size={16} /> {highContrast ? "Standard contrast" : "High contrast"}
+                  <Eye size={16} /> {highContrast ? t("Standard contrast") : t("High contrast")}
                 </button>
               </div>
             </div>
@@ -579,15 +556,14 @@ async function handleExplainDocument() {
             <div className="privacy-icon">
               <ShieldCheck size={25} />
             </div>
-            <span className="eyebrow">YOUR INFORMATION MATTERS</span>
-            <h3>Care with confidence</h3>
+            <span className="eyebrow">{t("YOUR INFORMATION MATTERS")}</span>
+            <h3>{t("Care with confidence")}</h3>
             <p>
-              This prototype processes uploaded documents through your local
-              backend. Use fictional documents while testing.
+              {t("This prototype processes uploaded documents through your local backend. Use fictional documents while testing.")}
             </p>
             <div className="privacy-note">
               <CheckCircle2 size={17} />
-              Local prototype · No document history saved
+              {t("Local prototype · No document history saved")}
             </div>
           </div>
         </section>
@@ -605,13 +581,67 @@ async function handleExplainDocument() {
       return (
         <>
           <div className="page-intro">
-            <span className="eyebrow">YOUR HEALTH TOOLS</span>
-            <h2>Medical Reports</h2>
-            <p>{pageDescriptions[activePage]}</p>
+            <span className="eyebrow">{t("YOUR HEALTH TOOLS")}</span>
+            <h2>{t("Medical Reports")}</h2>
+            <p>{t(pageDescriptions[activePage])}</p>
           </div>
           {renderUploadWorkspace()}
         </>
       );
+    }
+
+    if (activePage === "Find health videos") {
+      return (
+        <section className="workspace-card video-search-card">
+          <div className="workspace-heading">
+            <div className="workspace-icon">
+              <Stethoscope size={25} />
+            </div>
+            <div>
+              <span className="eyebrow">{t("HEALTH EDUCATION")}</span>
+              <h2>{t("Find health videos")}</h2>
+              <p>{t("Search YouTube for videos about a disease or health topic.")}</p>
+            </div>
+          </div>
+          <form className="video-search-form" onSubmit={searchHealthVideos}>
+            <label className="visually-hidden" htmlFor="health-video-search">
+              {t("Disease or health topic")}
+            </label>
+            <input
+              id="health-video-search"
+              className="video-search-input"
+              type="search"
+              value={youtubeKeyword}
+              onChange={(event) => setYoutubeKeyword(event.target.value)}
+              placeholder={t("For example, diabetes")}
+              maxLength={120}
+              required
+            />
+            <button className="button button-primary" type="submit">
+              <Search size={18} /> {t("Search YouTube")}
+            </button>
+          </form>
+          <p className="video-search-note">
+            {t("Videos open on YouTube. Discuss medical information with a qualified healthcare professional.")}
+          </p>
+        </section>
+      );
+    }
+
+    if (activePage === "Reminders") {
+      return <Reminders medication={medication} backendStatus={backendStatus} t={t} language={language} />;
+    }
+
+    if (activePage === "Doctor Visit Notes") {
+      return <DoctorVisitNotes t={t} language={language} />;
+    }
+
+    if (activePage === "Health FAQ Chat") {
+      return <FaqChat t={t} />;
+    }
+
+    if (activePage === "Nearby Medical Stores") {
+      return <NearbyMedicalStores t={t} />;
     }
 
     return (
@@ -619,93 +649,21 @@ async function handleExplainDocument() {
         <div className={`coming-icon ${currentFeature?.color || "mint"}`}>
           <Icon size={34} />
         </div>
-        <span className="eyebrow">UNMYST HEALTH TOOLS</span>
-        <h2>{activePage}</h2>
+        <span className="eyebrow">{t("UNMYST HEALTH TOOLS")}</span>
+        <h2>{t(activePage)}</h2>
         <p className="coming-description">
-          {pageDescriptions[activePage] ||
-            "Explore accessible healthcare information and tools."}
+          {t(pageDescriptions[activePage] || "Explore accessible healthcare information and tools.")}
         </p>
         <div className="coming-status">
           <Clock3 size={18} />
-          Interface ready · Feature integration pending
+          {t("Interface ready · Feature integration pending")}
         </div>
-
-        {activePage === "Voice Assistant" && (
-          <div className="feature-preview">
-            <Volume2 size={22} />
-            <div>
-              <strong>Read information aloud</strong>
-              <p>
-                Text-to-speech is available for extracted document text in the
-                Medical Reports section.
-              </p>
-            </div>
-            <button
-              className="button button-secondary"
-              onClick={() => navigateTo("Medical Reports")}
-            >
-              Try it <ArrowRight size={17} />
-            </button>
-          </div>
-        )}
-
-        {activePage === "Nearby Medical Stores" && (
-          <div className="feature-preview">
-            <MapPin size={22} />
-            <div>
-              <strong>Location-based pharmacy search</strong>
-              <p>
-                Maps, pharmacy discovery, and medicine availability checks
-                still need to be connected.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activePage === "Reminders" && (
-          <div className="feature-preview">
-            <Bell size={22} />
-            <div>
-              <strong>Medicine and appointment reminders</strong>
-              <p>
-                Reminder creation, notifications, and saved schedules still
-                need to be implemented.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activePage === "Prescription Reader" && (
-          <div className="feature-preview">
-            <Pill size={22} />
-            <div>
-              <strong>Prescription understanding</strong>
-              <p>
-                Prescription image reading and medication explanations still
-                need OCR and AI integration.
-              </p>
-            </div>
-          </div>
-        )}
-
-        {activePage === "Doctor Visit Notes" && (
-          <div className="feature-preview">
-            <ClipboardList size={22} />
-            <div>
-              <strong>Appointment notes and care instructions</strong>
-              <p>
-                Saving visit notes and organizing care history still need to
-                be implemented.
-              </p>
-            </div>
-          </div>
-        )}
 
         <button
           className="button button-primary"
           onClick={() => navigateTo("Dashboard")}
         >
-          <Home size={18} /> Back to dashboard
+          <Home size={18} /> {t("Back to dashboard")}
         </button>
       </section>
     );
@@ -732,11 +690,11 @@ async function handleExplainDocument() {
           </span>
           <span className="brand-name">
             UNMYST
-            <small>Healthcare, understood.</small>
+            <small>{t("Healthcare, understood.")}</small>
           </span>
         </button>
 
-        <div className="nav-caption">MENU</div>
+        <div className="nav-caption">{t("MENU")}</div>
         <nav className="sidebar-nav" aria-label="Main navigation">
           {navigation.map((item) => {
             const Icon = item.icon;
@@ -750,7 +708,7 @@ async function handleExplainDocument() {
                 aria-current={active ? "page" : undefined}
               >
                 <Icon size={20} strokeWidth={active ? 2.2 : 1.8} />
-                <span>{item.label}</span>
+                <span>{t(item.label)}</span>
                 {active && <span className="active-indicator" />}
               </button>
             );
@@ -762,14 +720,14 @@ async function handleExplainDocument() {
             <div className="support-icon">
               <CircleHelp size={21} />
             </div>
-            <strong>Need a little help?</strong>
-            <p>We are here to make healthcare easier to understand.</p>
+            <strong>{t("Need a little help?")}</strong>
+            <p>{t("We are here to make healthcare easier to understand.")}</p>
             <button
               onClick={() =>
                 setNotice("Help centre integration is planned for a future update.")
               }
             >
-              Get help <ArrowRight size={16} />
+              {t("Get help")} <ArrowRight size={16} />
             </button>
           </div>
 
@@ -780,12 +738,12 @@ async function handleExplainDocument() {
             }
           >
             <Settings size={20} />
-            <span>Accessibility settings</span>
+            <span>{t("Accessibility settings")}</span>
           </button>
 
           <div className="sidebar-footer">
             <span className="footer-dot" />
-            Built with care for accessible healthcare
+            {t("Built with care for accessible healthcare")}
           </div>
         </div>
       </aside>
@@ -803,26 +761,37 @@ async function handleExplainDocument() {
             <div className="breadcrumb">
               <span>UNMYST</span>
               <ChevronRight size={15} />
-              <strong>{activePage}</strong>
+              <strong>{t(activePage)}</strong>
             </div>
           </div>
 
           <div className="topbar-actions">
+            <label className="language-picker">
+              <Languages size={17} aria-hidden="true" />
+              <span className="visually-hidden">{t("Language")}</span>
+              <select
+                aria-label={t("Language")}
+                value={language}
+                onChange={(event) => setLanguage(event.target.value)}
+              >
+                {LANGUAGES.map((item) => (
+                  <option key={item.code} value={item.code}>{item.label}</option>
+                ))}
+              </select>
+            </label>
             <div className={`connection-pill ${backendStatus}`}>
               <span className="connection-dot" />
               {backendStatus === "checking"
-                ? "Connecting..."
+                ? t("Connecting...")
                 : backendStatus === "connected"
-                  ? "System connected"
-                  : "Backend offline"}
+                  ? t("System connected")
+                  : t("Backend offline")}
             </div>
 
             <button
               className="topbar-icon"
-              aria-label="Notifications"
-              onClick={() =>
-                setNotice("Notifications will be available when reminders are integrated.")
-              }
+              aria-label={t("Notifications")}
+              onClick={() => navigateTo("Reminders")}
             >
               <Bell size={20} />
             </button>
@@ -839,10 +808,10 @@ async function handleExplainDocument() {
               <div className="page-heading">
                 <div>
                   <span className="eyebrow">
-                    <CalendarDays size={15} /> YOUR PERSONAL HEALTH SPACE
+                    <CalendarDays size={15} /> {t("YOUR PERSONAL HEALTH SPACE")}
                   </span>
-                  <h1>Welcome to UNMYST <span className="wave">✳</span></h1>
-                  <p>Clearer information. More confident healthcare decisions.</p>
+                  <h1>{t("Welcome to UNMYST")} <span className="wave">✳</span></h1>
+                  <p>{t("Clearer information. More confident healthcare decisions.")}</p>
                 </div>
                 <button
                   className="button button-secondary heading-help"
@@ -850,7 +819,7 @@ async function handleExplainDocument() {
                     setNotice("Choose any tool from the dashboard or navigation menu to get started.")
                   }
                 >
-                  <CircleHelp size={18} /> How it works
+                  <CircleHelp size={18} /> {t("How it works")}
                 </button>
               </div>
               {renderDashboard()}
@@ -860,16 +829,16 @@ async function handleExplainDocument() {
               <div className="page-heading inner-page-heading">
                 <div>
                   <span className="eyebrow">
-                    <Activity size={15} /> YOUR PERSONAL HEALTH SPACE
+                    <Activity size={15} /> {t("YOUR PERSONAL HEALTH SPACE")}
                   </span>
-                  <h1>{activePage}</h1>
-                  <p>{pageDescriptions[activePage] || "Your healthcare, made easier."}</p>
+                  <h1>{t(activePage)}</h1>
+                  <p>{t(pageDescriptions[activePage] || "Your healthcare, made easier.")}</p>
                 </div>
                 <button
                   className="button button-secondary heading-help"
                   onClick={() => navigateTo("Dashboard")}
                 >
-                  <Home size={17} /> Dashboard
+                  <Home size={17} /> {t("Dashboard")}
                 </button>
               </div>
               {renderFeaturePage()}
@@ -879,7 +848,7 @@ async function handleExplainDocument() {
           {notice && (
             <div className="global-notice" role="status">
               <CheckCircle2 size={18} />
-              <span>{notice}</span>
+              <span>{t(notice)}</span>
               <button
                 aria-label="Dismiss message"
                 onClick={() => setNotice("")}
@@ -893,10 +862,10 @@ async function handleExplainDocument() {
             <div className="footer-brand">
               <Heart size={17} /> UNMYST
             </div>
-            <span>Making healthcare information easier to understand.</span>
+            <span>{t("Making healthcare information easier to understand.")}</span>
             <div className="footer-links">
-              <span><ShieldCheck size={15} /> Accessibility first</span>
-              <span><Languages size={15} /> Inclusive by design</span>
+              <span><ShieldCheck size={15} /> {t("Accessibility first")}</span>
+              <span><Languages size={15} /> {t("Inclusive by design")}</span>
             </div>
           </footer>
         </div>

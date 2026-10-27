@@ -29,6 +29,7 @@ node_modules/
 __pycache__/
 *.py[cod]
 .venv/
+backend/data/
 venv/
 dist/
 *.zip

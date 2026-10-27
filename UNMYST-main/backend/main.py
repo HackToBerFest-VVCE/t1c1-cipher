@@ -9,6 +9,11 @@ from google import genai
 from pydantic import BaseModel
 from pypdf import PdfReader
 
+try:  # `uvicorn backend.main:app` (run from the project root)
+    from .reminders import router as reminders_router
+except ImportError:  # `uvicorn main:app` (run from inside backend/)
+    from reminders import router as reminders_router
+
 # Load the API key from backend/.env
 BACKEND_DIR = Path(__file__).resolve().parent
 load_dotenv(BACKEND_DIR / ".env")
@@ -16,7 +21,7 @@ load_dotenv(BACKEND_DIR / ".env")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GEMMA_MODEL = "gemma-4-26b-a4b-it"
 
-app = FastAPI(title="UNMYST API", version="1.1.0")
+app = FastAPI(title="UNMYST API", version="1.2.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -30,6 +35,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Medication reminders (CRUD, dose log, JSON persistence)
+app.include_router(reminders_router)
 
 # Initialize the Google Gen AI client only when an API key is configured.
 gemma_client = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
